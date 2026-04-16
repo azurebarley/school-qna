@@ -6,102 +6,78 @@ from datetime import datetime
 import json
 import os
 
-# --- 1. API 및 구글 시트 설정 ---
-# secrets에서 제미나이 API 키를 가져와 설정합니다.
+# --- 1. 기본 설정 및 성능 최적화 ---
 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 
-def get_authorized_model():
-    """사용자의 API 키로 접근 가능한 최적의 모델(flash 또는 pro)을 자동으로 찾아 반환합니다."""
-    try:
-        for m in genai.list_models():
-            if 'generateContent' in m.supported_generation_methods:
-                if 'flash' in m.name or 'pro' in m.name:
-                    return m.name
-    except:
-        pass
-    return "models/gemini-1.5-flash" # 기본 권장 모델
+# 캐시를 사용하여 매번 모델 리스트를 불러오지 않도록 함
+@st.cache_resource
+def get_model():
+    # 가장 빠르고 가벼운 1.5-flash 모델을 기본으로 사용
+    return genai.GenerativeModel('gemini-1.5-flash')
 
-# 구글 시트 인증 및 연결
-scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-creds_dict = json.loads(st.secrets["google_credentials"])
-creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-client = gspread.authorize(creds)
-
-# 주무관님의 구글 시트 주소를 직접 연결합니다.
-SHEET_URL = "https://docs.google.com/spreadsheets/d/1CDnTXib4J3C0QYrCKIMUcbZoS6Olez4Pkq3ltOJSH9U/edit"
-sheet = client.open_by_url(SHEET_URL).sheet1
-
-# --- 2. 데이터 및 환경 설정 ---
+# 매뉴얼 데이터를 캐싱하여 파일 읽기 횟수 감소
+@st.cache_data
 def load_manual_data():
-    """깃허브에 올린 매뉴얼.txt 파일을 읽어옵니다."""
     if os.path.exists("매뉴얼.txt"):
         with open("매뉴얼.txt", "r", encoding="utf-8") as f:
             return f.read()
-    return "현재 등록된 시설개방 지침 및 예약 현황 데이터가 없습니다."
+    return "현재 등록된 시설개방 지침 데이터가 없습니다."
 
-# --- 3. 웹사이트 UI 구성 ---
-st.set_page_config(page_title="시설개방 스마트 헬퍼", page_icon="🏫", layout="centered")
+# 구글 시트 연결 설정 (최초 1회만 실행)
+@st.cache_resource
+def get_gsheet():
+    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    creds_dict = json.loads(st.secrets["google_credentials"])
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+    client = gspread.authorize(creds)
+    return client.open_by_url("https://docs.google.com/spreadsheets/d/1CDnTXib4J3C0QYrCKIMUcbZoS6Olez4Pkq3ltOJSH9U/edit").sheet1
 
+# --- 2. 화면 UI ---
+st.set_page_config(page_title="시설개방 헬퍼", page_icon="🏫")
 st.title("🏫 학교시설개방 스마트 질의응답")
-st.markdown("""
-안양과천 교육지원청의 **시설개방 지침** 및 **학교별 이용 가능 현황**에 대해 질문해주세요.  
-예) *"오늘 저녁 7시에 비어있는 체육관 알려줘"*, *"시설개방 인센티브가 뭐야?"*
-""")
-st.write("---")
+st.markdown("안양과천 교육지원청 시설개방 지침 및 예약 현황을 안내합니다.")
 
-# 질문 입력 폼
-with st.form("qna_form", clear_on_submit=False):
-    # 학교명 입력 칸을 없애고 질문창만 크게 배치하여 편의성을 높였습니다.
-    user_question = st.text_area("궁금한 점을 상세히 입력해주세요.", height=200, placeholder="여기에 질문을 입력하세요...")
+# 사용자 질문 입력
+with st.form("qna_form"):
+    user_question = st.text_area("궁금한 점을 입력하세요.", height=150, placeholder="예: 체육관 미개방 사유가 뭐야?")
     submitted = st.form_submit_button("질문하기")
 
     if submitted:
         if not user_question.strip():
-            st.warning("질문을 입력하지 않으셨습니다.")
-        else:
-            with st.spinner('안양과천 교육지원청의 최신 지침과 현황을 확인하고 있습니다...'):
-                try:
-                    # 매뉴얼 및 예약 현황 데이터 로드
-                    manual_context = load_manual_data()
-                    
-                    # 사용할 AI 모델 가져오기
-                    target_model_name = get_authorized_model()
-                    model = genai.GenerativeModel(target_model_name)
-                    
-                    # AI에게 줄 최종 지침(Prompt) - 이용자 없는 학교 위주 답변 지침 포함
-                    full_instruction = f"""
-당신은 안양과천교육지원청의 학교시설개방 업무를 보조하는 AI 전문가입니다.
-제공된 [데이터]를 바탕으로 질문에 답변하세요.
+            st.warning("질문을 입력해주세요.")
+            st.stop()
+        
+        with st.spinner('지침을 확인 중...'):
+            try:
+                # 최적화된 데이터 로드
+                model = get_model()
+                manual_context = load_manual_data()
+                sheet = get_gsheet()
+                
+                # 프롬프트를 간결하게 다듬어 토큰 사용량 절감
+                prompt = f"""당신은 안양과천교육지원청 시설개방 AI입니다. 
+지침에 근거하여 답변하되, 지침에 없는 내용은 행정실 문의를 안내하세요. 
+이용 가능한 시설 문의 시 데이터 내 미예약 학교를 우선 추천하세요.
 
-[핵심 답변 원칙]
-1. 이용 가능한 시설을 묻는 경우, [데이터]의 예약 현황을 분석하여 '현재 이용 단체가 없는 시간대'를 가진 학교를 우선적으로 추천하세요.
-2. 특정 학교가 꽉 찼다면, 데이터 내에서 비어있는 인근 학교를 대안으로 제시하세요.
-3. 지침에 명시된 '학교 자율 개방 원칙(강제 배정 불가)'을 항상 유념하여 답변하세요.
-4. 데이터에 없는 상세 예약은 "해당 학교 행정실로 실시간 확인이 필요함"을 안내하세요.
-
-[데이터]
+[지침 데이터]
 {manual_context}
 
-[질문]: {user_question}
-"""
-                    # 답변 생성
-                    response = model.generate_content(full_instruction)
-                    answer_text = response.text
-                    
-                    # 결과 화면 표시
-                    st.info(answer_text)
-                    
-                    # 구글 시트에 기록 (학교명은 '익명'으로 처리)
-                    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    sheet.append_row([now, "익명(웹사용자)", user_question, answer_text])
-                    
-                    st.success(f"✅ 답변이 완료되었습니다. (참조 모델: {target_model_name})")
-                    
-                except Exception as e:
-                    if "429" in str(e):
-                        st.error("⚠️ 현재 접속자가 많아 일시적으로 응답이 지연되고 있습니다. 약 30초 후 다시 시도해주세요.")
-                    else:
-                        st.error(f"오류가 발생했습니다: {e}")
+[질문]: {user_question}"""
 
-st.write("---")
-st.caption("© 2026 경기도안양과천교육지원청 재무관리과")
+                # 답변 생성
+                response = model.generate_content(prompt)
+                answer = response.text
+                
+                # 결과 출력
+                st.info(answer)
+                
+                # 구글 시트 기록
+                now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                sheet.append_row([now, "익명", user_question, answer])
+                st.success("✅ 답변 완료 및 기록되었습니다.")
+
+            except Exception as e:
+                if "429" in str(e):
+                    st.error("⚠️ 일시적으로 사용량이 많습니다. 약 30초 뒤 다시 시도해주세요.")
+                else:
+                    st.error(f"오류 발생: {e}")
