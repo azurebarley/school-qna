@@ -8,10 +8,12 @@ import json, os, time
 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 
 def get_model_name():
-    for m in genai.list_models():
-        if 'generateContent' in m.supported_generation_methods:
-            if 'flash' in m.name or 'pro' in m.name: return m.name
-    return "models/gemini-1.5-flash"
+    # 2.5 모델은 한도가 너무 적으므로 1.5 모델을 우선적으로 찾습니다.
+    available_models = [m.name for m in genai.list_models()]
+    for m_name in available_models:
+        if "gemini-1.5-flash" in m_name:
+            return m_name
+    return "models/gemini-1.5-flash" # 강제 지정
 
 # 구글 시트 연결
 creds_dict = json.loads(st.secrets["google_credentials"])
