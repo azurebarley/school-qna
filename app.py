@@ -37,9 +37,20 @@ with st.form("qna_form"):
                 
                 manual_content = open("매뉴얼.txt", "r", encoding="utf-8").read() if os.path.exists("매뉴얼.txt") else ""
                 
-                # AI 지침: 학교명을 안 써도 자연스럽게 대답하도록 유도
-                prompt = f"당신은 시설개방 전문가입니다. 아래 지침을 근거로 답하세요.\n\n[지침]\n{manual_content}\n\n[질문]: {question}"
-                
+                # app.py 내 prompt 구성 부분 수정
+prompt = f"""
+당신은 시설개방 전문가입니다. 아래 지침과 이용 현황 데이터를 근거로 답변하세요.
+
+[응대 원칙]
+1. 이용 가능한 시설을 묻는 질문에는 반드시 '이용 중인 단체가 없는 시간대'가 있는 학교만 추천하세요.
+2. 특정 학교의 예약이 꽉 차 있다면 그 사실을 알리고, 대신 비어있는 인근 학교를 제안하세요.
+3. 데이터에 없는 내용은 "현재 실시간 예약 현황에 포함되어 있지 않으니 학교 행정실로 확인이 필요합니다"라고 안내하세요.
+
+[지침 및 이용 현황 데이터]
+{manual_content}
+
+[질문]: {question}
+"""
                 response = model.generate_content(prompt)
                 st.info(response.text)
                 
