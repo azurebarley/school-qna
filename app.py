@@ -5,7 +5,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
 import json
 
-# --- 1. API 및 구글 시트 설정 (비밀 금고에서 가져오기) ---
+# --- 1. API 및 구글 시트 설정 ---
 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
@@ -34,8 +34,27 @@ with st.form("qna_form"):
     if submitted and user_question:
         with st.spinner('안양과천교육지원청 지침을 확인하며 답변을 생성 중입니다...'):
             try:
-                # 최신/표준 모델 이름으로 변경
-                model = genai.GenerativeModel('gemini-1.5-flash')
+                # 💡 마법의 코드: 내 열쇠로 쓸 수 있는 AI 이름표를 서버에서 직접 가져옵니다.
+                valid_models = []
+                for m in genai.list_models():
+                    if 'generateContent' in m.supported_generation_methods:
+                        valid_models.append(m.name.replace("models/", ""))
+                
+                if not valid_models:
+                    st.error("사용 가능한 AI 모델이 없습니다. API 키를 다시 확인해주세요.")
+                    st.stop()
+                    
+                # 사용 가능한 목록 중 가장 똑똑한 모델을 자동으로 선택
+                target_model = valid_models[0]
+                for m_name in valid_models:
+                    if "flash" in m_name:
+                        target_model = m_name
+                        break
+                    elif "pro" in m_name:
+                        target_model = m_name
+                        
+                # 🎯 자동으로 찾은 모델명으로 챗봇 실행!
+                model = genai.GenerativeModel(target_model)
                 response = model.generate_content(f"{INSTRUCTION}\n\n질문: {user_question}")
                 answer = response.text
                 
@@ -45,9 +64,10 @@ with st.form("qna_form"):
                 # 구글 시트에 기록
                 now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 sheet.append_row([now, school_name, user_question, answer])
-                st.success("✅ 관리자 시트에 질문 내역이 자동 취합되었습니다.")
+                
+                # 어떤 AI가 답변했는지 화면에 슬쩍 보여줍니다.
+                st.success(f"✅ 관리자 시트에 질문 내역이 자동 취합되었습니다. (답변 AI: {target_model})")
                 
             except Exception as e:
-                # 에러가 발생해도 화면이 깨지지 않고 정확한 원인을 보여줌
                 st.error("앗! AI 서버와 통신하는 중 문제가 발생했습니다.")
                 st.warning(f"에러 상세 내용: {e}")
