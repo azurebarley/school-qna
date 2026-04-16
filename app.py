@@ -84,3 +84,24 @@ with st.form("qna_form", clear_on_submit=False):
 
 [질문]: {user_question}
 """
+                    # 답변 생성
+                    response = model.generate_content(full_instruction)
+                    answer_text = response.text
+                    
+                    # 결과 화면 표시
+                    st.info(answer_text)
+                    
+                    # 구글 시트에 기록 (학교명은 '익명'으로 처리)
+                    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    sheet.append_row([now, "익명(웹사용자)", user_question, answer_text])
+                    
+                    st.success(f"✅ 답변이 완료되었습니다. (참조 모델: {target_model_name})")
+                    
+                except Exception as e:
+                    if "429" in str(e):
+                        st.error("⚠️ 현재 접속자가 많아 일시적으로 응답이 지연되고 있습니다. 약 30초 후 다시 시도해주세요.")
+                    else:
+                        st.error(f"오류가 발생했습니다: {e}")
+
+st.write("---")
+st.caption("© 2026 경기도안양과천교육지원청 재무관리과")
