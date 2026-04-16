@@ -34,7 +34,7 @@ with st.form("qna_form"):
 
     if submitted and user_question:
         with st.spinner('답변을 찾고 있습니다...'):
-            model = genai.GenerativeModel('models/gemini-1.5-flash')
+            model = genai.GenerativeModel('gemini-pro')
             response = model.generate_content(f"{INSTRUCTION}\n\n질문: {user_question}")
             answer = response.text
             
