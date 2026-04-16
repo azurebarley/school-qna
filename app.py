@@ -35,7 +35,6 @@ st.set_page_config(page_title="시설개방 헬퍼", page_icon="🏫")
 st.title("🏫 시설개방 스마트 질의응답")
 
 with st.form("qna_form"):
-    school = st.text_input("소속 학교명")
     question = st.text_area("궁금한 점을 상세히 적어주세요.")
     submit = st.form_submit_button("질문하기")
 
@@ -55,7 +54,7 @@ with st.form("qna_form"):
                 st.info(response.text)
                 
                 # 시트 기록
-                sheet.append_row([school, question, response.text])
+                sheet.append_row([question, response.text])
                 st.success(f"✅ 기록 완료 (사용 모델: {model_name})")
                 
             except Exception as e:
