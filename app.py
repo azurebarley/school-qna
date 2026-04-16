@@ -15,7 +15,7 @@ creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
 client = gspread.authorize(creds)
 
 # '내가_만든_시트_이름'을 실제 구글 시트 이름으로 바꿔주세요. (예: 시설개방_질문취합)
-sheet = client.open("내가_만든_시트_이름").sheet1 
+sheet = client.open("시설개방 챗봇").sheet1 
 
 # --- 2. AI 지침 설정 ---
 INSTRUCTION = """
