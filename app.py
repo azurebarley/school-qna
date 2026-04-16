@@ -9,13 +9,12 @@ import json
 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-# JSON 파일 대신 스트림릿 비밀 금고에서 정보를 읽어옵니다.
 creds_dict = json.loads(st.secrets["google_credentials"])
 creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
 client = gspread.authorize(creds)
 
-# '내가_만든_시트_이름'을 실제 구글 시트 이름으로 바꿔주세요. (예: 시설개방_질문취합)
-sheet = client.open_by_url("https://docs.google.com/spreadsheets/d/1CDnTXib4J3C0QYrCKIMUcbZoS6Olez4Pkq3ltOJSH9U/edit?gid=0#gid=0").sheet1 
+# 구글 시트 연결
+sheet = client.open_by_url("https://docs.google.com/spreadsheets/d/1CDnTXib4J3C0QYrCKIMUcbZoS6Olez4Pkq3ltOJSH9U/edit").sheet1 
 
 # --- 2. AI 지침 설정 ---
 INSTRUCTION = """
@@ -33,15 +32,22 @@ with st.form("qna_form"):
     submitted = st.form_submit_button("질문하기")
 
     if submitted and user_question:
-        with st.spinner('답변을 찾고 있습니다...'):
-            model = genai.GenerativeModel('gemini-pro')
-            response = model.generate_content(f"{INSTRUCTION}\n\n질문: {user_question}")
-            answer = response.text
-            
-            st.write("---")
-            st.markdown(f"**AI 답변:**\n{answer}")
-            
-            # 구글 시트에 기록
-            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            sheet.append_row([now, school_name, user_question, answer])
-            st.success("✅ 관리자 시트에 질문 내역이 자동 취합되었습니다.")
+        with st.spinner('안양과천교육지원청 지침을 확인하며 답변을 생성 중입니다...'):
+            try:
+                # 최신/표준 모델 이름으로 변경
+                model = genai.GenerativeModel('gemini-1.5-flash')
+                response = model.generate_content(f"{INSTRUCTION}\n\n질문: {user_question}")
+                answer = response.text
+                
+                st.write("---")
+                st.markdown(f"**AI 답변:**\n{answer}")
+                
+                # 구글 시트에 기록
+                now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                sheet.append_row([now, school_name, user_question, answer])
+                st.success("✅ 관리자 시트에 질문 내역이 자동 취합되었습니다.")
+                
+            except Exception as e:
+                # 에러가 발생해도 화면이 깨지지 않고 정확한 원인을 보여줌
+                st.error("앗! AI 서버와 통신하는 중 문제가 발생했습니다.")
+                st.warning(f"에러 상세 내용: {e}")
