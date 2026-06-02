@@ -80,7 +80,7 @@ if submit:
                 max_tokens=2048,
             )
             answer = response.choices[0].message.content
-            answer = answer.replace("~~", r"\~\~")
+            answer = answer.replace("~", r"\~")
 
             # 답변 출력
             st.success("✅ 답변이 생성되었습니다.")
