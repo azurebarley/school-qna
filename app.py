@@ -37,7 +37,7 @@ def get_sheet():
 #       · FAQ        : 질문 | 답변
 #    FAQ는 엑셀에서 행만 추가하면 코드 수정 없이 바로 반영됩니다.
 # ───────────────────────────────────────────
-DATA_FILE = "facility_chatbot_data"
+DATA_FILE = "facility_chatbot_data.xlsx"
 
 
 def _make_aliases(school_name: str) -> set:
@@ -52,12 +52,9 @@ def _make_aliases(school_name: str) -> set:
 
 @st.cache_data
 def load_school_data():
-    try:
-        df = pd.read_excel(DATA_FILE, sheet_name="학교데이터").fillna("")
-        df["_검색키"] = df["학교명"].astype(str).str.replace(" ", "", regex=False)
-        return df
-    except Exception:
-        return pd.DataFrame()
+    df = pd.read_excel(DATA_FILE, sheet_name="학교데이터").fillna("")
+    df["_검색키"] = df["학교명"].astype(str).str.replace(" ", "", regex=False)
+    return df
 
 
 @st.cache_data
@@ -76,11 +73,8 @@ def build_alias_index(df: pd.DataFrame):
 
 @st.cache_data
 def load_faq():
-    try:
-        df = pd.read_excel(DATA_FILE, sheet_name="FAQ").fillna("")
-        return df
-    except Exception:
-        return pd.DataFrame()
+    df = pd.read_excel(DATA_FILE, sheet_name="FAQ").fillna("")
+    return df
 
 
 def find_school(df: pd.DataFrame, alias_index: list, user_text: str):
@@ -102,6 +96,8 @@ def build_school_context(row) -> str:
     def or_none(v):
         return v if str(v).strip() else "정보 없음"
 
+    note = or_none(row["비고"]) if "비고" in row.index else "정보 없음"
+
     return (
         f"[{row['학교명']} 시설개방 현황]\n"
         f"- 운동장: {or_none(row['운동장_개방방법'])} | "
@@ -112,7 +108,7 @@ def build_school_context(row) -> str:
         f"이용 동호회: {or_none(row['체육관_이용동호회'])}\n"
         f"- 그 외 시설: {or_none(row['그외시설_개방방법'])} | "
         f"{or_none(row['그외시설_요일시간'])}\n"
-        f"- 비고: {or_none(row['비고'])}"
+        f"- 비고: {note}"
     )
 
 
@@ -148,9 +144,22 @@ if submit:
 
     with st.spinner("데이터를 확인하며 답변을 생성 중입니다..."):
         try:
-            school_df = load_school_data()
+            try:
+                school_df = load_school_data()
+                faq_df = load_faq()
+            except Exception as data_err:
+                st.error(
+                    f"⚠️ 데이터 파일을 읽지 못했습니다: {data_err}\n\n"
+                    f"GitHub 저장소에 '{DATA_FILE}' 이름의 파일이 정확히 있는지, "
+                    f"시트 이름이 '학교데이터' / 'FAQ'인지 확인해주세요."
+                )
+                st.stop()
+
+            if school_df.empty:
+                st.error(f"⚠️ '{DATA_FILE}'의 학교데이터 시트가 비어 있습니다. 파일을 확인해주세요.")
+                st.stop()
+
             alias_index = build_alias_index(school_df)
-            faq_df = load_faq()
 
             matched_row = find_school(school_df, alias_index, question)
             if matched_row is not None:
