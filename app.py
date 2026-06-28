@@ -4,6 +4,8 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import json
 import os
+import re
+import pandas as pd
 
 # ───────────────────────────────────────────
 # 1. Groq API 설정
@@ -11,7 +13,7 @@ import os
 client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 
 # ───────────────────────────────────────────
-# 2. 구글 시트 연결
+# 2. 구글 시트 연결 (질문/답변 로그용 - 기존과 동일)
 # ───────────────────────────────────────────
 @st.cache_resource
 def get_sheet():
@@ -27,13 +29,106 @@ def get_sheet():
     ).sheet1
 
 # ───────────────────────────────────────────
-# 3. 매뉴얼 불러오기
+# 3. 학교 시설 데이터 + FAQ 불러오기
+#    -> "시설개방_챗봇데이터.xlsx" 한 파일 안에 시트 두 개
+#       · 학교데이터 : 학교명 | 운동장_개방방법 | 운동장_요일시간 | 운동장_이용동호회 |
+#                      체육관_개방방법 | 체육관_요일시간 | 체육관_이용동호회 |
+#                      그외시설_개방방법 | 그외시설_요일시간 | 비고
+#       · FAQ        : 질문 | 답변
+#    FAQ는 엑셀에서 행만 추가하면 코드 수정 없이 바로 반영됩니다.
 # ───────────────────────────────────────────
-def load_manual():
-    if os.path.exists("매뉴얼.txt"):
-        with open("매뉴얼.txt", "r", encoding="utf-8") as f:
-            return f.read()
-    return "등록된 지침 자료가 없습니다."
+DATA_FILE = "facility_chatbot_data"
+
+
+def _make_aliases(school_name: str) -> set:
+    """'인덕원중학교' -> {'인덕원중학교', '인덕원중'} 같은 축약 별칭 생성.
+    초/중/고 급을 구분해 동명 학교(인덕원초/중/고 등) 오매칭을 방지."""
+    aliases = {school_name}
+    for full, abbr in [("초등학교", "초"), ("중학교", "중"), ("고등학교", "고")]:
+        if school_name.endswith(full):
+            aliases.add(school_name[: -len(full)] + abbr)
+    return aliases
+
+
+@st.cache_data
+def load_school_data():
+    try:
+        df = pd.read_excel(DATA_FILE, sheet_name="학교데이터").fillna("")
+        df["_검색키"] = df["학교명"].astype(str).str.replace(" ", "", regex=False)
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+
+@st.cache_data
+def build_alias_index(df: pd.DataFrame):
+    """(별칭, 행 인덱스) 목록을 별칭이 긴 것부터 정렬해 반환.
+    긴 별칭을 먼저 검사해야 '안양서초'와 '안양서중' 같은 비슷한 이름이 안 섞임."""
+    if df.empty:
+        return []
+    pairs = []
+    for idx, key in df["_검색키"].items():
+        for alias in _make_aliases(key):
+            pairs.append((alias, idx))
+    pairs.sort(key=lambda x: -len(x[0]))
+    return pairs
+
+
+@st.cache_data
+def load_faq():
+    try:
+        df = pd.read_excel(DATA_FILE, sheet_name="FAQ").fillna("")
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+
+def find_school(df: pd.DataFrame, alias_index: list, user_text: str):
+    """질문 문장에서 학교명을 찾아 해당 행을 반환 (없으면 None).
+    '관양초'처럼 줄임말로 물어봐도 매칭되며, 초/중/고 급을 구분해
+    동명 학교(인덕원초/중/고 등)를 정확히 구분한다."""
+    if df.empty or not alias_index:
+        return None
+
+    q = user_text.replace(" ", "")
+    for alias, idx in alias_index:
+        if alias and alias in q:
+            return df.loc[idx]
+    return None
+
+
+def build_school_context(row) -> str:
+    """해당 학교 1개 행만 압축한 컨텍스트. 전체 표 대신 이것만 프롬프트에 포함."""
+    def or_none(v):
+        return v if str(v).strip() else "정보 없음"
+
+    return (
+        f"[{row['학교명']} 시설개방 현황]\n"
+        f"- 운동장: {or_none(row['운동장_개방방법'])} | "
+        f"{or_none(row['운동장_요일시간'])} | "
+        f"이용 동호회: {or_none(row['운동장_이용동호회'])}\n"
+        f"- 체육관: {or_none(row['체육관_개방방법'])} | "
+        f"{or_none(row['체육관_요일시간'])} | "
+        f"이용 동호회: {or_none(row['체육관_이용동호회'])}\n"
+        f"- 그 외 시설: {or_none(row['그외시설_개방방법'])} | "
+        f"{or_none(row['그외시설_요일시간'])}\n"
+        f"- 비고: {or_none(row['비고'])}"
+    )
+
+
+def build_faq_context(faq_df: pd.DataFrame) -> str:
+    """FAQ는 보통 분량이 적어 전체를 그대로 포함."""
+    if faq_df.empty:
+        return "등록된 FAQ가 없습니다."
+
+    lines = []
+    for _, row in faq_df.iterrows():
+        q = str(row.get("질문", "")).strip()
+        a = str(row.get("답변", "")).strip()
+        if q:
+            lines.append(f"Q: {q}\nA: {a}")
+    return "\n\n".join(lines) if lines else "등록된 FAQ가 없습니다."
+
 
 # ───────────────────────────────────────────
 # 4. UI
@@ -51,24 +146,35 @@ if submit:
         st.warning("⚠️ 질문을 입력해주세요.")
         st.stop()
 
-    with st.spinner("지침서를 확인하며 답변을 생성 중입니다..."):
+    with st.spinner("데이터를 확인하며 답변을 생성 중입니다..."):
         try:
-            manual = load_manual()
+            school_df = load_school_data()
+            alias_index = build_alias_index(school_df)
+            faq_df = load_faq()
+
+            matched_row = find_school(school_df, alias_index, question)
+            if matched_row is not None:
+                school_context = build_school_context(matched_row)
+            else:
+                school_context = "질문에서 특정 학교명을 인식하지 못했습니다. 학교 관련 질문이라면 정확한 학교명을 다시 요청하세요."
+
+            faq_context = build_faq_context(faq_df)
+
             system_prompt = f"""당신은 안양과천교육지원청 학교시설 개방 담당 AI 도우미입니다.
 
-아래는 학교별 시설 개방 현황 데이터입니다.
-데이터는 탭(\\t)으로 구분된 표 형식이며 열 순서는 다음과 같습니다:
-학교명 | 개방시설 | 개방 요일 및 시간 | 매칭 동호회명 | 비고
-
 [규칙]
-1. 질문에 학교명이 언급되면 해당 학교의 행을 찾아 정확히 답변하세요.
-2. 개방 시간, 시설 종류, 동호회 정보를 구체적으로 안내하세요.
-3. 데이터에 해당 학교나 시설이 없을 때만 "해당 정보가 없습니다"라고 답하세요.
-4. 반드시 데이터를 끝까지 꼼꼼히 확인한 후 답변하세요.
-5. 답변은 한국어로, 표 형식이나 목록으로 보기 좋게 정리해주세요.
+1. 질문에 학교명이 언급되면 아래 "학교 시설 데이터"를 근거로 정확히 답변하세요.
+2. 학교 시설과 무관한 일반적인 질문(매칭 제도, 신청 방법 등)은 아래 "FAQ"를 근거로 답변하세요.
+3. 개방 시간, 시설 종류, 동호회 정보를 구체적으로 안내하세요.
+4. 아래 자료에 해당 내용이 없을 때만 "해당 정보가 없습니다"라고 답하세요. 추측해서 답변하지 마세요.
+5. 학교명이 인식되지 않았다는 안내가 보이면, 사용자에게 정확한 학교명을 알려달라고 요청하세요.
+6. 답변은 한국어로, 표 형식이나 목록으로 보기 좋게 정리해주세요.
 
-[시설 개방 현황 데이터]
-{manual}"""
+[FAQ]
+{faq_context}
+
+[학교 시설 데이터]
+{school_context}"""
 
             response = client.chat.completions.create(
                 model="llama-3.3-70b-versatile",
